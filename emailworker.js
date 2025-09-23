@@ -1,11 +1,14 @@
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 
-const serviceAccount = require("./complaintmnagamentsys-firebase-adminsdk-fbsvc-5c5352ca49.json");
+/* =============================
+   🔹 Firebase Setup via ENV
+============================= */
+const serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://cme-access-management.firebaseio.com/"
+  databaseURL: process.env.FIREBASE_DB_URL || "https://cme-access-management.firebaseio.com/"
 });
 
 /* =============================
@@ -14,8 +17,8 @@ admin.initializeApp({
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: process.env.GMAIL_USER || "vaishnavir2028@gmail.com", 
-    pass: process.env.GMAIL_PASS || "qtuluxemlaernrvi"
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS
   }
 });
 
@@ -41,16 +44,16 @@ async function processEmailQueue() {
       try {
         await transporter.sendMail({
           to: emailItem.to,
-          from: process.env.GMAIL_USER || "vaishnavir2028@gmail.com",
+          from: process.env.GMAIL_USER,
           subject: emailItem.subject,
           html: emailItem.body
         });
 
-        console.log(" Email sent to", emailItem.to);
+        console.log("Email sent to", emailItem.to);
         await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
 
       } catch (err) {
-        console.error(" Email failed, will retry", err);
+        console.error("Email failed, will retry", err);
         const retries = (emailItem.retries || 0) + 1;
         await admin.database().ref(`/emailQueue/${key}`).update({ retries });
       }
@@ -64,4 +67,4 @@ async function processEmailQueue() {
    🔹 Run Worker Every 15 Seconds
 ============================= */
 setInterval(processEmailQueue, 15000);
-console.log(" Email worker running...");
+console.log("Email worker running...");

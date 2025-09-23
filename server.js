@@ -6,13 +6,13 @@ const app = express();
 app.use(bodyParser.json());
 
 /* =============================
-   🔹 Firebase Admin Setup
+   🔹 Firebase Admin Setup via ENV
 ============================= */
-const serviceAccount = require("./complaintmnagamentsys-firebase-adminsdk-fbsvc-5c5352ca49.json");
+const serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://cme-access-management.firebaseio.com/"
+  databaseURL: process.env.FIREBASE_DB_URL || "https://cme-access-management.firebaseio.com/"
 });
 
 /* =============================
@@ -29,13 +29,13 @@ app.post("/signup", async (req, res) => {
       role === "rp" ? `/rp/${uid}` :
       `/users/${uid}`;
 
-    //  Save user in Firebase
+    // Save user in Firebase
     await admin.database().ref(path).update({ name, email, role, verified: false });
 
-    //  Queue email for admin approval
+    // Queue email for admin approval
     const emailQueueRef = admin.database().ref("/emailQueue").push();
     await emailQueueRef.set({
-      to: process.env.ADMIN_EMAIL || "vyshnavirrao@gmail.com",
+      to: process.env.ADMIN_EMAIL, // use ENV variable
       subject: "New User Signup Approval",
       body: `
         <h2>New user signed up</h2>
