@@ -1,0 +1,19 @@
+{
+  "name": "ams_server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "worker": "node emailWorker.js"
+  },
+  "description": "Access Management System Backend",
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "express": "^5.1.0",
+    "firebase-admin": "^13.5.0",
+    "node-fetch": "^3.3.2",
+    "nodemailer": "^7.0.6"
+  }
+}
