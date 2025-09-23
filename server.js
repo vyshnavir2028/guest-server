@@ -1,18 +1,38 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const admin = require("firebase-admin");
+const nodemailer = require("nodemailer");
 
 const app = express();
 app.use(bodyParser.json());
 
 /* =============================
-   🔹 Firebase Admin Setup via ENV
+   🔹 Firebase Setup via ENV
 ============================= */
 const serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert({
+    ...serviceAccount,
+    private_key: serviceAccount.private_key.replace(/\\n/g, '\n') // fix newline issue
+  }),
   databaseURL: process.env.FIREBASE_DB_URL || "https://cme-access-management.firebaseio.com/"
+});
+
+/* =============================
+   🔹 Gmail SMTP Setup
+============================= */
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS
+  }
+});
+
+transporter.verify((error, success) => {
+  if (error) console.error("Email transporter error:", error);
+  else console.log("✅ Email transporter ready");
 });
 
 /* =============================
@@ -35,7 +55,7 @@ app.post("/signup", async (req, res) => {
     // Queue email for admin approval
     const emailQueueRef = admin.database().ref("/emailQueue").push();
     await emailQueueRef.set({
-      to: process.env.ADMIN_EMAIL, // use ENV variable
+      to: process.env.ADMIN_EMAIL,
       subject: "New User Signup Approval",
       body: `
         <h2>New user signed up</h2>
@@ -74,14 +94,10 @@ app.get("/approve", async (req, res) => {
   try {
     await admin.database().ref(path).update({ verified: true });
 
-    // Fetch user data for push notification if needed
+    // Optional: send push notification if user.playerId exists
     const snapshot = await admin.database().ref(path).once("value");
     const user = snapshot.val();
-
-    // Optional: send push notification if user.playerId exists
-    if (user && user.playerId) {
-      console.log("Send push notification logic here");
-    }
+    if (user && user.playerId) console.log("Send push notification logic here");
 
     res.send("<h2>✅ User verified successfully!</h2>");
   } catch (err) {
@@ -89,6 +105,46 @@ app.get("/approve", async (req, res) => {
     res.status(500).send("<h2>❌ Error verifying user</h2>");
   }
 });
+
+/* =============================
+   🔹 Email Worker
+============================= */
+async function processEmailQueue() {
+  try {
+    const snapshot = await admin.database().ref("/emailQueue")
+      .orderByChild("status").equalTo("pending")
+      .once("value");
+
+    const emails = snapshot.val();
+    if (!emails) return;
+
+    for (const key in emails) {
+      const emailItem = emails[key];
+      try {
+        await transporter.sendMail({
+          to: emailItem.to,
+          from: process.env.GMAIL_USER,
+          subject: emailItem.subject,
+          html: emailItem.body
+        });
+
+        console.log("📧 Email sent to", emailItem.to);
+        await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
+
+      } catch (err) {
+        console.error("⚠️ Email failed, will retry", err);
+        const retries = (emailItem.retries || 0) + 1;
+        await admin.database().ref(`/emailQueue/${key}`).update({ retries });
+      }
+    }
+  } catch (err) {
+    console.error("Worker error:", err);
+  }
+}
+
+// Run worker every 15 seconds
+setInterval(processEmailQueue, 15000);
+console.log("🚀 Email worker running...");
 
 /* =============================
    🔹 Start Server
