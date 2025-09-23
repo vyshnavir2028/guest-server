@@ -7,7 +7,10 @@ const nodemailer = require("nodemailer");
 const serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert({
+    ...serviceAccount,
+    private_key: serviceAccount.private_key.replace(/\\n/g, '\n') // ✅ fix newline issue
+  }),
   databaseURL: process.env.FIREBASE_DB_URL || "https://cme-access-management.firebaseio.com/"
 });
 
@@ -24,7 +27,7 @@ const transporter = nodemailer.createTransport({
 
 transporter.verify((error, success) => {
   if (error) console.error("Email transporter error:", error);
-  else console.log("Email transporter ready");
+  else console.log("✅ Email transporter ready");
 });
 
 /* =============================
@@ -49,11 +52,11 @@ async function processEmailQueue() {
           html: emailItem.body
         });
 
-        console.log("Email sent to", emailItem.to);
+        console.log("📧 Email sent to", emailItem.to);
         await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
 
       } catch (err) {
-        console.error("Email failed, will retry", err);
+        console.error("⚠️ Email failed, will retry", err);
         const retries = (emailItem.retries || 0) + 1;
         await admin.database().ref(`/emailQueue/${key}`).update({ retries });
       }
@@ -67,4 +70,4 @@ async function processEmailQueue() {
    🔹 Run Worker Every 15 Seconds
 ============================= */
 setInterval(processEmailQueue, 15000);
-console.log("Email worker running...");
+console.log("🚀 Email worker running...");
