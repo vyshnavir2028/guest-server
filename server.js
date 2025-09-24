@@ -4,8 +4,6 @@ const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 const OneSignal = require("onesignal-node");
 
-require("dotenv").config();
-
 const app = express();
 app.use(bodyParser.json());
 
@@ -35,7 +33,7 @@ const transporter = nodemailer.createTransport({
 
 transporter.verify((error, success) => {
   if (error) console.error("Email transporter error:", error);
-  else console.log(" Email transporter ready");
+  else console.log("✅ Email transporter ready");
 });
 
 /* =============================
@@ -60,7 +58,6 @@ app.post("/signup", async (req, res) => {
       role === "rp" ? `/rp/${uid}` :
       `/users/${uid}`;
 
-    // Save user in Firebase
     await admin.database().ref(path).update({
       name,
       email,
@@ -69,7 +66,6 @@ app.post("/signup", async (req, res) => {
       verified: false
     });
 
-    // Queue email for admin approval
     const emailQueueRef = admin.database().ref("/emailQueue").push();
     await emailQueueRef.set({
       to: process.env.ADMIN_EMAIL,
@@ -109,16 +105,12 @@ app.get("/approve", async (req, res) => {
     `/users/${uid}`;
 
   try {
-    //  Set verified = true
     await admin.database().ref(path).update({ verified: true });
 
-    // Fetch user info
     const snapshot = await admin.database().ref(path).once("value");
     const user = snapshot.val();
-
     if (!user) return res.status(404).send("<h2>User not found</h2>");
 
-    //  1. Send push notification via OneSignal
     if (user.playerId) {
       const notification = {
         contents: { en: `Hi ${user.name}, your account has been approved! 🎉` },
@@ -126,13 +118,12 @@ app.get("/approve", async (req, res) => {
       };
       try {
         await oneSignalClient.createNotification(notification);
-        console.log(" Push notification sent to:", user.name);
+        console.log("✅ Push notification sent to:", user.name);
       } catch (pushErr) {
         console.error("Push notification error:", pushErr);
       }
     }
 
-    //  2. Send approval email to user
     if (user.email) {
       try {
         await transporter.sendMail({
@@ -146,13 +137,13 @@ app.get("/approve", async (req, res) => {
             <p>Thanks,<br/>Team</p>
           `
         });
-        console.log(" Approval email sent to:", user.email);
+        console.log("📧 Approval email sent to:", user.email);
       } catch (emailErr) {
         console.error("Email sending error:", emailErr);
       }
     }
 
-    res.send("<h2> User verified successfully and notifications sent!</h2>");
+    res.send("<h2>✅ User verified successfully and notifications sent!</h2>");
   } catch (err) {
     console.error(err);
     res.status(500).send("<h2>Error verifying user</h2>");
@@ -181,11 +172,10 @@ async function processEmailQueue() {
           html: emailItem.body
         });
 
-        console.log("Email sent to", emailItem.to);
+        console.log("📧 Email sent to", emailItem.to);
         await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
-
       } catch (err) {
-        console.error("Email failed, will retry", err);
+        console.error("❌ Email failed, will retry", err);
         const retries = (emailItem.retries || 0) + 1;
         await admin.database().ref(`/emailQueue/${key}`).update({ retries });
       }
@@ -195,12 +185,8 @@ async function processEmailQueue() {
   }
 }
 
-// Run worker every 15 seconds
 setInterval(processEmailQueue, 15000);
-console.log("Email worker running...");
+console.log("📨 Email worker running...");
 
-/* =============================
-   🔹 Start Server
-============================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(` Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
