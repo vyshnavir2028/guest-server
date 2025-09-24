@@ -105,12 +105,27 @@ app.get("/approve", async (req, res) => {
     `/users/${uid}`;
 
   try {
+    // Only update verified = true without touching other fields
     await admin.database().ref(path).update({ verified: true });
 
+    // Mark the admin email as sent in the queue if exists
+    const emailQueueSnapshot = await admin.database().ref("/emailQueue")
+      .orderByChild("to").equalTo(process.env.ADMIN_EMAIL)
+      .once("value");
+
+    const emails = emailQueueSnapshot.val();
+    if (emails) {
+      for (const key in emails) {
+        await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
+      }
+    }
+
+    // Fetch user info without overwriting anything
     const snapshot = await admin.database().ref(path).once("value");
     const user = snapshot.val();
     if (!user) return res.status(404).send("<h2>User not found</h2>");
 
+    // Send push notification if playerId exists
     if (user.playerId) {
       const notification = {
         contents: { en: `Hi ${user.name}, your account has been approved! 🎉` },
@@ -124,6 +139,7 @@ app.get("/approve", async (req, res) => {
       }
     }
 
+    // Send approval email to user
     if (user.email) {
       try {
         await transporter.sendMail({
@@ -143,12 +159,13 @@ app.get("/approve", async (req, res) => {
       }
     }
 
-    res.send("<h2>✅ User verified successfully and notifications sent!</h2>");
+    res.send("<h2>✅ User verified successfully, admin email marked sent, notifications sent!</h2>");
   } catch (err) {
     console.error(err);
     res.status(500).send("<h2>Error verifying user</h2>");
   }
 });
+
 
 /* =============================
    🔹 Email Worker
