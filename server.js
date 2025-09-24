@@ -33,7 +33,7 @@ const transporter = nodemailer.createTransport({
 
 transporter.verify((error, success) => {
   if (error) console.error("Email transporter error:", error);
-  else console.log("✅ Email transporter ready");
+  else console.log("Email transporter ready");
 });
 
 /* =============================
@@ -81,7 +81,8 @@ app.post("/signup", async (req, res) => {
         </a>
       `,
       status: "pending",
-      retries: 0
+      retries: 0,
+      type: "signup" // flag to identify admin email
     });
 
     res.send({ success: true, message: "User registered and email queued" });
@@ -107,7 +108,7 @@ app.get("/approve", async (req, res) => {
     // Only set verified true, do NOT touch playerId or other fields
     await admin.database().ref(path).update({ verified: true });
 
-    // Mark the admin email as sent in the queue (without touching user object)
+    // Mark the admin email as sent in queue (if exists) to avoid duplicates
     const emailQueueSnapshot = await admin.database().ref("/emailQueue")
       .orderByChild("to").equalTo(process.env.ADMIN_EMAIL)
       .once("value");
@@ -115,7 +116,10 @@ app.get("/approve", async (req, res) => {
     const emails = emailQueueSnapshot.val();
     if (emails) {
       for (const key in emails) {
-        await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
+        const item = emails[key];
+        if (item.type === "signup" && item.status !== "sent") {
+          await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
+        }
       }
     }
 
@@ -124,22 +128,24 @@ app.get("/approve", async (req, res) => {
     const user = snapshot.val();
     if (!user) return res.status(404).send("<h2>User not found</h2>");
 
-    // Send push notification if playerId exists
-    if (user.playerId) {
+    // Send push notification if playerId exists (only once)
+    if (user.playerId && !user.notified) {
       const notification = {
         contents: { en: `Hi ${user.name}, your account has been approved! 🎉` },
         include_player_ids: [user.playerId],
       };
       try {
         await oneSignalClient.createNotification(notification);
-        console.log("✅ Push notification sent to:", user.name);
+        console.log("Push notification sent to:", user.name);
+        // Mark as notified so it doesn’t repeat
+        await admin.database().ref(path).update({ notified: true });
       } catch (pushErr) {
         console.error("Push notification error:", pushErr);
       }
     }
 
-    // Send approval email to user
-    if (user.email) {
+    // Send approval email to user only if not sent before
+    if (user.email && !user.emailSent) {
       try {
         await transporter.sendMail({
           to: user.email,
@@ -152,13 +158,15 @@ app.get("/approve", async (req, res) => {
             <p>Thanks,<br/>Team</p>
           `
         });
-        console.log("📧 Approval email sent to:", user.email);
+        console.log(" Approval email sent to:", user.email);
+        // Mark email sent
+        await admin.database().ref(path).update({ emailSent: true });
       } catch (emailErr) {
         console.error("Email sending error:", emailErr);
       }
     }
 
-    res.send("<h2>✅ User verified successfully</h2>");
+    res.send("<h2>User verified successfully</h2>");
   } catch (err) {
     console.error(err);
     res.status(500).send("<h2>Error verifying user</h2>");
@@ -187,10 +195,10 @@ async function processEmailQueue() {
           html: emailItem.body
         });
 
-        console.log("📧 Email sent to", emailItem.to);
+        console.log(" Email sent to", emailItem.to);
         await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
       } catch (err) {
-        console.error("❌ Email failed, will retry", err);
+        console.error("Email failed, will retry", err);
         const retries = (emailItem.retries || 0) + 1;
         await admin.database().ref(`/emailQueue/${key}`).update({ retries });
       }
@@ -201,7 +209,7 @@ async function processEmailQueue() {
 }
 
 setInterval(processEmailQueue, 15000);
-console.log("📨 Email worker running...");
+console.log(" Email worker running...");
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
