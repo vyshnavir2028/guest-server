@@ -14,10 +14,11 @@ const serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG);
 admin.initializeApp({
   credential: admin.credential.cert({
     ...serviceAccount,
-    private_key: serviceAccount.private_key.replace(/\\n/g, '\n') // fix newline issue
+    private_key: serviceAccount.private_key.replace(/\\n/g, '\n')
   }),
-  databaseURL: process.env.FIREBASE_DB_URL || "https://cme-access-management.firebaseio.com/"
+  databaseURL: process.env.FIREBASE_DB_URL
 });
+
 
 /* =============================
    🔹 Gmail SMTP Setup
@@ -32,7 +33,7 @@ const transporter = nodemailer.createTransport({
 
 transporter.verify((error, success) => {
   if (error) console.error("Email transporter error:", error);
-  else console.log("✅ Email transporter ready");
+  else console.log(" Email transporter ready");
 });
 
 /* =============================
@@ -63,7 +64,7 @@ app.post("/signup", async (req, res) => {
         <p><b>Email:</b> ${email}</p>
         <p><b>Role:</b> ${role}</p>
         <p>Click to approve:</p>
-        <a href="https://your-backend.com/approve?uid=${uid}&role=${role}" 
+        <a href="https://guest-server.onrender.com/approve?uid=${uid}&role=${role}" 
            style="padding:10px 16px;background:#28a745;color:#fff;text-decoration:none;border-radius:6px;">
            Approve User
         </a>
@@ -99,10 +100,10 @@ app.get("/approve", async (req, res) => {
     const user = snapshot.val();
     if (user && user.playerId) console.log("Send push notification logic here");
 
-    res.send("<h2>✅ User verified successfully!</h2>");
+    res.send("<h2> User verified successfully!</h2>");
   } catch (err) {
     console.error(err);
-    res.status(500).send("<h2>❌ Error verifying user</h2>");
+    res.status(500).send("<h2>Error verifying user</h2>");
   }
 });
 
@@ -128,11 +129,11 @@ async function processEmailQueue() {
           html: emailItem.body
         });
 
-        console.log("📧 Email sent to", emailItem.to);
+        console.log("Email sent to", emailItem.to);
         await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
 
       } catch (err) {
-        console.error("⚠️ Email failed, will retry", err);
+        console.error("Email failed, will retry", err);
         const retries = (emailItem.retries || 0) + 1;
         await admin.database().ref(`/emailQueue/${key}`).update({ retries });
       }
@@ -144,10 +145,10 @@ async function processEmailQueue() {
 
 // Run worker every 15 seconds
 setInterval(processEmailQueue, 15000);
-console.log("🚀 Email worker running...");
+console.log("Email worker running...");
 
 /* =============================
    🔹 Start Server
 ============================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
