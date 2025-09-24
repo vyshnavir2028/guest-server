@@ -107,6 +107,9 @@ app.post("/signup", async (req, res) => {
 /* =============================
    🔹 Admin Approval Endpoint
 ============================= */
+/* =============================
+   🔹 Admin Approval Endpoint
+============================= */
 app.get("/approve", async (req, res) => {
   const { uid, role } = req.query;
   if (!uid || !role) return res.status(400).send("<h3>Missing uid or role</h3>");
@@ -135,7 +138,7 @@ app.get("/approve", async (req, res) => {
       }
     }
 
-    // Queue approval email to user
+    // Queue approval email to user if not already sent
     if (!user.emailSent) {
       const emailQueueRef = admin.database().ref("/emailQueue");
       const newEmailRef = emailQueueRef.push();
@@ -152,8 +155,12 @@ app.get("/approve", async (req, res) => {
         retries: 0,
         type: "userApproval",
         uid,
-        role  // ✅ include role so email worker updates correct node
+        role
       });
+
+      // ✅ Immediately mark emailSent to prevent duplicate emails
+      await userRef.update({ emailSent: true });
+
       console.log("Approval email queued for user:", user.email);
     }
 
@@ -163,6 +170,7 @@ app.get("/approve", async (req, res) => {
     res.status(500).send("<h2>Error verifying user</h2>");
   }
 });
+
 
 /* =============================
    🔹 Email Worker
