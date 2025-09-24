@@ -45,7 +45,7 @@ const oneSignalClient = new OneSignal.Client(
 );
 
 /* =============================
-   🔹 Signup Endpoint
+   🔹 Signup Endpoint (Queue Admin Email)
 ============================= */
 app.post("/signup", async (req, res) => {
   try {
@@ -58,15 +58,21 @@ app.post("/signup", async (req, res) => {
       role === "rp" ? `/rp/${uid}` :
       `/users/${uid}`;
 
-    // Only set playerId if it exists
+    // Save user data
     const dataToSave = { name, email, role, verified: false };
     if (playerId) dataToSave.playerId = playerId;
-
     await admin.database().ref(path).update(dataToSave);
 
-    // Queue email for admin approval
-    const emailQueueRef = admin.database().ref("/emailQueue").push();
-    await emailQueueRef.set({
+    // Ensure /emailQueue exists
+    const emailQueueRef = admin.database().ref("/emailQueue");
+    const snapshot = await emailQueueRef.once("value");
+    if (!snapshot.exists()) {
+      await emailQueueRef.set({});
+    }
+
+    // Push admin approval email
+    const newEmailRef = emailQueueRef.push();
+    await newEmailRef.set({
       to: process.env.ADMIN_EMAIL,
       subject: "New User Signup Approval",
       body: `
@@ -82,7 +88,7 @@ app.post("/signup", async (req, res) => {
       `,
       status: "pending",
       retries: 0,
-      type: "signup" // flag to identify admin email
+      type: "signup"
     });
 
     res.send({ success: true, message: "User registered and email queued" });
@@ -105,65 +111,46 @@ app.get("/approve", async (req, res) => {
     `/users/${uid}`;
 
   try {
-    // Only set verified true, do NOT touch playerId or other fields
-    await admin.database().ref(path).update({ verified: true });
-
-    // Mark the admin email as sent in queue (if exists) to avoid duplicates
-    const emailQueueSnapshot = await admin.database().ref("/emailQueue")
-      .orderByChild("to").equalTo(process.env.ADMIN_EMAIL)
-      .once("value");
-
-    const emails = emailQueueSnapshot.val();
-    if (emails) {
-      for (const key in emails) {
-        const item = emails[key];
-        if (item.type === "signup" && item.status !== "sent") {
-          await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
-        }
-      }
-    }
-
-    // Fetch user info
-    const snapshot = await admin.database().ref(path).once("value");
+    const userRef = admin.database().ref(path);
+    const snapshot = await userRef.once("value");
     const user = snapshot.val();
     if (!user) return res.status(404).send("<h2>User not found</h2>");
 
-    // Send push notification if playerId exists (only once)
+    // Update verified
+    await userRef.update({ verified: true });
+
+    // Send push notification if playerId exists and not yet notified
     if (user.playerId && !user.notified) {
-      const notification = {
-        contents: { en: `Hi ${user.name}, your account has been approved! 🎉` },
-        include_player_ids: [user.playerId],
-      };
       try {
-        await oneSignalClient.createNotification(notification);
-        console.log("Push notification sent to:", user.name);
-        // Mark as notified so it doesn’t repeat
-        await admin.database().ref(path).update({ notified: true });
+        await oneSignalClient.createNotification({
+          contents: { en: `Hi ${user.name}, your account has been approved! 🎉` },
+          include_player_ids: [user.playerId],
+        });
+        await userRef.update({ notified: true });
       } catch (pushErr) {
-        console.error("Push notification error:", pushErr);
+        console.error("Push notification failed:", pushErr);
       }
     }
 
-    // Send approval email to user only if not sent before
-    if (user.email && !user.emailSent) {
-      try {
-        await transporter.sendMail({
-          to: user.email,
-          from: process.env.GMAIL_USER,
-          subject: "Your Account Has Been Approved!",
-          html: `
-            <h2>Hi ${user.name},</h2>
-            <p>Your account has been approved by the admin.</p>
-            <p>You can now log in and start using the system.</p>
-            <p>Thanks,<br/>Team</p>
-          `
-        });
-        console.log(" Approval email sent to:", user.email);
-        // Mark email sent
-        await admin.database().ref(path).update({ emailSent: true });
-      } catch (emailErr) {
-        console.error("Email sending error:", emailErr);
-      }
+    // Queue approval email to user (if not sent yet)
+    if (!user.emailSent) {
+      const emailQueueRef = admin.database().ref("/emailQueue");
+      const newEmailRef = emailQueueRef.push();
+      await newEmailRef.set({
+        to: user.email,
+        subject: "Your Account Has Been Approved!",
+        body: `
+          <h2>Hi ${user.name},</h2>
+          <p>Your account has been approved by the admin.</p>
+          <p>You can now log in and start using the system.</p>
+          <p>Thanks,<br/>Team</p>
+        `,
+        status: "pending",
+        retries: 0,
+        type: "userApproval",
+        uid
+      });
+      console.log("Approval email queued for user:", user.email);
     }
 
     res.send("<h2>User verified successfully</h2>");
@@ -174,7 +161,7 @@ app.get("/approve", async (req, res) => {
 });
 
 /* =============================
-   🔹 Email Worker
+   🔹 Email Worker (Guaranteed Delivery)
 ============================= */
 async function processEmailQueue() {
   try {
@@ -195,21 +182,30 @@ async function processEmailQueue() {
           html: emailItem.body
         });
 
-        console.log(" Email sent to", emailItem.to);
+        console.log("Email sent to:", emailItem.to);
         await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
+
+        // If this email is user approval, mark emailSent in user record
+        if (emailItem.type === "userApproval" && emailItem.uid) {
+          const userPath = `/staff/${emailItem.uid}`; // Adjust if needed for RP/users
+          const userSnap = await admin.database().ref(userPath).once("value");
+          if (userSnap.exists()) {
+            await admin.database().ref(userPath).update({ emailSent: true });
+          }
+        }
       } catch (err) {
-        console.error("Email failed, will retry", err);
+        console.error("Email send failed, retrying later:", err);
         const retries = (emailItem.retries || 0) + 1;
         await admin.database().ref(`/emailQueue/${key}`).update({ retries });
       }
     }
   } catch (err) {
-    console.error("Worker error:", err);
+    console.error("Email worker error:", err);
   }
 }
 
-setInterval(processEmailQueue, 15000);
-console.log(" Email worker running...");
+setInterval(processEmailQueue, 10000);
+console.log("Email worker running...");
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
