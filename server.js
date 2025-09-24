@@ -45,7 +45,16 @@ const oneSignalClient = new OneSignal.Client(
 );
 
 /* =============================
-   🔹 Signup Endpoint (Queue Admin Email)
+   🔹 Helper to get user path
+============================= */
+function getUserPath(uid, role) {
+  if (role === "staff") return `/staff/${uid}`;
+  if (role === "rp") return `/rp/${uid}`;
+  throw new Error(`Invalid role: ${role}`);
+}
+
+/* =============================
+   🔹 Signup Endpoint
 ============================= */
 app.post("/signup", async (req, res) => {
   try {
@@ -53,24 +62,21 @@ app.post("/signup", async (req, res) => {
     if (!uid || !name || !email || !role)
       return res.status(400).send({ success: false, message: "All fields required" });
 
-    const path =
-      role === "staff" ? `/staff/${uid}` :
-      role === "rp" ? `/rp/${uid}` :
-      `/users/${uid}`;
+    const path = getUserPath(uid, role);
 
-    // Save user data
+    // Save user with verified: false
     const dataToSave = { name, email, role, verified: false };
     if (playerId) dataToSave.playerId = playerId;
     await admin.database().ref(path).update(dataToSave);
 
-    // Ensure /emailQueue exists
+    // Ensure emailQueue exists
     const emailQueueRef = admin.database().ref("/emailQueue");
     const snapshot = await emailQueueRef.once("value");
     if (!snapshot.exists()) {
       await emailQueueRef.set({});
     }
 
-    // Push admin approval email
+    // Queue admin approval email
     const newEmailRef = emailQueueRef.push();
     await newEmailRef.set({
       to: process.env.ADMIN_EMAIL,
@@ -105,10 +111,7 @@ app.get("/approve", async (req, res) => {
   const { uid, role } = req.query;
   if (!uid || !role) return res.status(400).send("<h3>Missing uid or role</h3>");
 
-  const path =
-    role === "staff" ? `/staff/${uid}` :
-    role === "rp" ? `/rp/${uid}` :
-    `/users/${uid}`;
+  const path = getUserPath(uid, role);
 
   try {
     const userRef = admin.database().ref(path);
@@ -116,7 +119,7 @@ app.get("/approve", async (req, res) => {
     const user = snapshot.val();
     if (!user) return res.status(404).send("<h2>User not found</h2>");
 
-    // Update verified
+    // ✅ Update verified to true
     await userRef.update({ verified: true });
 
     // Send push notification if playerId exists and not yet notified
@@ -132,7 +135,7 @@ app.get("/approve", async (req, res) => {
       }
     }
 
-    // Queue approval email to user (if not sent yet)
+    // Queue approval email to user
     if (!user.emailSent) {
       const emailQueueRef = admin.database().ref("/emailQueue");
       const newEmailRef = emailQueueRef.push();
@@ -148,7 +151,8 @@ app.get("/approve", async (req, res) => {
         status: "pending",
         retries: 0,
         type: "userApproval",
-        uid
+        uid,
+        role  // ✅ include role so email worker updates correct node
       });
       console.log("Approval email queued for user:", user.email);
     }
@@ -161,7 +165,7 @@ app.get("/approve", async (req, res) => {
 });
 
 /* =============================
-   🔹 Email Worker (Guaranteed Delivery)
+   🔹 Email Worker
 ============================= */
 async function processEmailQueue() {
   try {
@@ -185,9 +189,9 @@ async function processEmailQueue() {
         console.log("Email sent to:", emailItem.to);
         await admin.database().ref(`/emailQueue/${key}`).update({ status: "sent" });
 
-        // If this email is user approval, mark emailSent in user record
-        if (emailItem.type === "userApproval" && emailItem.uid) {
-          const userPath = `/staff/${emailItem.uid}`; // Adjust if needed for RP/users
+        // ✅ Mark emailSent in correct user node
+        if (emailItem.type === "userApproval" && emailItem.uid && emailItem.role) {
+          const userPath = getUserPath(emailItem.uid, emailItem.role);
           const userSnap = await admin.database().ref(userPath).once("value");
           if (userSnap.exists()) {
             await admin.database().ref(userPath).update({ emailSent: true });
