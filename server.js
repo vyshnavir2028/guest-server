@@ -58,14 +58,13 @@ app.post("/signup", async (req, res) => {
       role === "rp" ? `/rp/${uid}` :
       `/users/${uid}`;
 
-    await admin.database().ref(path).update({
-      name,
-      email,
-      role,
-      playerId: playerId || null,
-      verified: false
-    });
+    // Only set playerId if it exists
+    const dataToSave = { name, email, role, verified: false };
+    if (playerId) dataToSave.playerId = playerId;
 
+    await admin.database().ref(path).update(dataToSave);
+
+    // Queue email for admin approval
     const emailQueueRef = admin.database().ref("/emailQueue").push();
     await emailQueueRef.set({
       to: process.env.ADMIN_EMAIL,
@@ -105,10 +104,10 @@ app.get("/approve", async (req, res) => {
     `/users/${uid}`;
 
   try {
-    // Only update verified = true without touching other fields
+    // Only set verified true, do NOT touch playerId or other fields
     await admin.database().ref(path).update({ verified: true });
 
-    // Mark the admin email as sent in the queue if exists
+    // Mark the admin email as sent in the queue (without touching user object)
     const emailQueueSnapshot = await admin.database().ref("/emailQueue")
       .orderByChild("to").equalTo(process.env.ADMIN_EMAIL)
       .once("value");
@@ -120,7 +119,7 @@ app.get("/approve", async (req, res) => {
       }
     }
 
-    // Fetch user info without overwriting anything
+    // Fetch user info
     const snapshot = await admin.database().ref(path).once("value");
     const user = snapshot.val();
     if (!user) return res.status(404).send("<h2>User not found</h2>");
@@ -159,13 +158,12 @@ app.get("/approve", async (req, res) => {
       }
     }
 
-    res.send("<h2>✅ User verified successfully, admin email marked sent, notifications sent!</h2>");
+    res.send("<h2>✅ User verified successfully</h2>");
   } catch (err) {
     console.error(err);
     res.status(500).send("<h2>Error verifying user</h2>");
   }
 });
-
 
 /* =============================
    🔹 Email Worker
